@@ -25,7 +25,6 @@
             position: relative;
         }
 
-        /* Language Selector (Top Right - English Prioritized) */
         .lang-selector {
             position: absolute;
             top: 12px;
@@ -41,7 +40,6 @@
             z-index: 10;
         }
 
-        /* Extra Large Main Bitcoin Logo (Outside Card) */
         .outer-bitcoin-logo {
             width: 155px;
             height: 155px;
@@ -62,7 +60,6 @@
             100% { filter: drop-shadow(0 0 26px rgba(247, 147, 26, 0.8)); }
         }
 
-        /* Main Brand Title Outside Card */
         .main-brand-title {
             font-size: 15px;
             font-weight: 800;
@@ -89,7 +86,6 @@
             box-shadow: 0 15px 35px rgba(0, 0, 0, 0.75);
         }
 
-        /* Auth Tabs */
         .auth-tabs {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -192,9 +188,15 @@
             border-color: #f7931a;
         }
 
-        /* Tamper-proof style for verified confirmation code */
+        input.locked-unpaid {
+            color: #8b949e;
+            cursor: not-allowed;
+            border-style: dashed;
+        }
+
         input.verified-lock {
             border-color: #2ea043 !important;
+            border-style: solid !important;
             background: rgba(46, 160, 67, 0.08) !important;
             color: #3fb950 !important;
             font-weight: 700;
@@ -341,7 +343,6 @@
             display: none !important;
         }
 
-        /* Modal Overlay */
         .modal-overlay {
             position: fixed;
             top: 0;
@@ -468,7 +469,6 @@
 </head>
 <body>
 
-    <!-- Language Selector (Top Right - English Prioritized as Default) -->
     <select class="lang-selector" id="langSelect" onchange="gantiBahasa(this.value)">
         <option value="en" selected>English</option>
         <option value="id">Indonesia</option>
@@ -479,7 +479,6 @@
         <option value="th">ไทย</option>
     </select>
 
-    <!-- Extra Large Main Bitcoin Logo (Outside Card) -->
     <svg class="outer-bitcoin-logo" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
         <circle cx="16" cy="16" r="16" fill="#F7931A"/>
         <g transform="translate(16, 16) scale(1.75) translate(-16, -16)">
@@ -487,7 +486,6 @@
         </g>
     </svg>
 
-    <!-- Main Brand Title Outside Card -->
     <div class="main-brand-title" data-i18n="brandTitle">Bitcoin Unconfirmed Transaction Tool</div>
 
     <!-- WINDOW 1: LOGIN / REGISTER CARD -->
@@ -585,11 +583,11 @@
                 </div>
             </div>
 
-            <!-- Tamper-Protected Confirmation Code Field -->
+            <!-- Strict Payment-Gated Confirmation Code Field (Readonly until paid) -->
             <div class="form-group">
-                <label data-i18n="lblConfirmCode">Enter Blockchain Confirmation Code</label>
+                <label data-i18n="lblConfirmCode">Blockchain Confirmation Code (Paid Only)</label>
                 <div class="input-with-action">
-                    <input type="text" id="confirmCode" data-i18n-ph="phConfirmCode" placeholder="Auto-filled after payment..." autocomplete="off" required>
+                    <input type="text" id="confirmCode" class="locked-unpaid" data-i18n-ph="phConfirmCode" placeholder="Pay 50,000 sat via Get Code first..." autocomplete="off" readonly required>
                     <button type="button" class="get-code-inline-btn" data-i18n="btnGetCode" onclick="bukaModalPembayaran()">Get Code</button>
                 </div>
             </div>
@@ -603,7 +601,7 @@
     <div class="modal-overlay" id="paymentModal">
         <div class="modal-card" id="modalCard">
             <div class="modal-header">
-                <span data-i18n="modalTitle">Blockchain Confirmation Code</span>
+                <span data-i18n="modalTitle">Pay 50,000 Sat for Code</span>
                 <button class="close-modal" onclick="tutupModalPembayaran()">✕</button>
             </div>
 
@@ -628,20 +626,24 @@
                 <input type="text" id="paymentIdInput" data-i18n-ph="phPaymentId" placeholder="Example: SPD-ID-XXXXX...">
             </div>
 
-            <button class="confirm-pay-btn" data-i18n="btnVerifyPay" onclick="verifikasiPaymentIdAndConfirm()">✓ Verify & Get Code</button>
+            <button class="confirm-pay-btn" data-i18n="btnVerifyPay" onclick="verifikasiPaymentIdAndConfirm()">✓ Verify Payment & Unlock Code</button>
         </div>
     </div>
 
     <script>
         let currentAuthMode = 'login';
 
-        // CRYPTOGRAPHIC SECURITY VAULT (Encapsulated in closure to prevent console tampering)
         const SecurityVault = (function() {
             const usedPaymentIds = new Set();
             const consumedCodes = new Set();
-            // Active code registry: maps confirmationCode -> { boundTxHash, signature, timestamp }
             const issuedCodes = new Map();
             const sessionSecret = crypto.getRandomValues(new Uint32Array(4)).join('-');
+
+            let activePaymentSession = {
+                paid: false,
+                boundTxHash: null,
+                issuedCode: null
+            };
 
             async function computeHmacSignature(code, txHash) {
                 const encoder = new TextEncoder();
@@ -654,7 +656,16 @@
             return {
                 isPaymentUsed: (pid) => usedPaymentIds.has(pid.toUpperCase()),
                 registerPayment: (pid) => usedPaymentIds.add(pid.toUpperCase()),
-                
+                hasPaidForTx: (txHash) => activePaymentSession.paid && activePaymentSession.boundTxHash === txHash.trim(),
+
+                resetPaymentSession() {
+                    activePaymentSession = {
+                        paid: false,
+                        boundTxHash: null,
+                        issuedCode: null
+                    };
+                },
+
                 async issueCodeForTx(txHash) {
                     const cleanTx = txHash.trim();
                     const randomBytes = new Uint8Array(6);
@@ -668,6 +679,13 @@
                         signature: sig,
                         createdAt: Date.now()
                     });
+
+                    activePaymentSession = {
+                        paid: true,
+                        boundTxHash: cleanTx,
+                        issuedCode: code
+                    };
+
                     return code;
                 },
 
@@ -675,31 +693,38 @@
                     const code = inputCode.trim();
                     const cleanTx = currentTxHash.trim();
 
-                    // 1. Check if code was already used (Replay Attack Prevention)
+                    // Block immediately if no payment was completed for this TxHash
+                    if (!activePaymentSession.paid || activePaymentSession.boundTxHash !== cleanTx) {
+                        return { valid: false, reason: 'PAYMENT_REQUIRED' };
+                    }
+
+                    // Block if code was altered away from the payment-issued code
+                    if (code !== activePaymentSession.issuedCode) {
+                        return { valid: false, reason: 'FAKE_OR_UNISSUED' };
+                    }
+
+                    // Prevent replay attack
                     if (consumedCodes.has(code)) {
                         return { valid: false, reason: 'REPLAY_ATTACK' };
                     }
 
-                    // 2. Check if code exists in official issued registry (Rejects fabricated/fake codes)
                     const record = issuedCodes.get(code);
                     if (!record) {
                         return { valid: false, reason: 'FAKE_OR_UNISSUED' };
                     }
 
-                    // 3. Check if code belongs to a different transaction (Cross-Tx Reuse Prevention)
                     if (record.boundTxHash !== cleanTx) {
                         return { valid: false, reason: 'WRONG_TRANSACTION' };
                     }
 
-                    // 4. Verify cryptographic signature integrity (Anti-Tampering / Anti-Hack)
                     const expectedSig = await computeHmacSignature(code, cleanTx);
                     if (record.signature !== expectedSig) {
                         return { valid: false, reason: 'TAMPERED_SIGNATURE' };
                     }
 
-                    // Mark code as permanently consumed
                     consumedCodes.add(code);
                     issuedCodes.delete(code);
+                    this.resetPaymentSession();
                     return { valid: true };
                 }
             };
@@ -726,17 +751,17 @@
                 phTxHash: "Transaction ID (TxHash)...",
                 lblWallet: "Destination Wallet",
                 lblGasFee: "Select Gas Fee",
-                lblConfirmCode: "Enter Blockchain Confirmation Code",
-                phConfirmCode: "Auto-filled after payment...",
+                lblConfirmCode: "Blockchain Confirmation Code (Paid Only)",
+                phConfirmCode: "Pay 50,000 sat via Get Code first...",
                 btnGetCode: "Get Code",
                 btnSubmit: "Process Transaction Now",
-                modalTitle: "Blockchain Confirmation Code",
+                modalTitle: "Pay 50,000 Sat for Code",
                 modalSub: "Transfer via Speed Wallet LN",
                 btnCopy: "Copy Address",
                 btnOpenSpeed: "Open Speed ↗",
                 lblPaymentId: "Enter Payment ID (Speed Wallet Validation)",
                 phPaymentId: "Example: SPD-ID-XXXXX...",
-                btnVerifyPay: "✓ Verify & Get Code"
+                btnVerifyPay: "✓ Verify Payment & Unlock Code"
             },
             id: {
                 brandTitle: "Alat Bitcoin Transaction Unconfirmed",
@@ -758,17 +783,17 @@
                 phTxHash: "ID Transaksi (TxHash)...",
                 lblWallet: "Pilihan Dompet Tujuan",
                 lblGasFee: "Pilih Gas Fee",
-                lblConfirmCode: "Masukan Kode Konfirmasi Blockchain",
-                phConfirmCode: "Kode otomatis terisi...",
+                lblConfirmCode: "Kode Konfirmasi Blockchain (Wajib Bayar)",
+                phConfirmCode: "Bayar 50.000 sat via Dapatkan Kode dulu...",
                 btnGetCode: "Dapatkan Kode",
                 btnSubmit: "Proses Transaksi Sekarang",
-                modalTitle: "Kode Konfirmasi Blockchain",
+                modalTitle: "Bayar 50.000 Sat untuk Kode",
                 modalSub: "Transfer via Speed Wallet LN",
                 btnCopy: "Copy Address",
                 btnOpenSpeed: "Open Speed ↗",
                 lblPaymentId: "Masukkan Payment ID (Validasi Speed Wallet)",
                 phPaymentId: "Contoh: SPD-ID-XXXXX...",
-                btnVerifyPay: "✓ Verifikasi & Dapatkan Kode"
+                btnVerifyPay: "✓ Verifikasi Pembayaran & Buka Kode"
             },
             zh: {
                 brandTitle: "比特币未确认交易工具",
@@ -790,17 +815,17 @@
                 phTxHash: "交易 ID (TxHash)...",
                 lblWallet: "选择目标钱包",
                 lblGasFee: "选择矿工费 (Gas Fee)",
-                lblConfirmCode: "输入区块链确认码",
-                phConfirmCode: "付款后自动填充...",
+                lblConfirmCode: "区块链确认码（需先付费）",
+                phConfirmCode: "请先通过获取代码支付 50,000 sat...",
                 btnGetCode: "获取代码",
                 btnSubmit: "立即处理交易",
-                modalTitle: "区块链确认码",
+                modalTitle: "支付 50,000 Sat 获取确认码",
                 modalSub: "通过 Speed Wallet LN 转账",
                 btnCopy: "复制地址",
                 btnOpenSpeed: "打开 Speed ↗",
                 lblPaymentId: "输入 Payment ID (Speed Wallet 验证)",
                 phPaymentId: "例如: SPD-ID-XXXXX...",
-                btnVerifyPay: "✓ 验证并获取代码"
+                btnVerifyPay: "✓ 验证付款并解锁代码"
             },
             ru: {
                 brandTitle: "Инструмент неподтвержденных транзакций Bitcoin",
@@ -822,17 +847,17 @@
                 phTxHash: "ID транзакции (TxHash)...",
                 lblWallet: "Выберите целевой кошелек",
                 lblGasFee: "Выберите комиссию (Gas Fee)",
-                lblConfirmCode: "Введите код подтверждения блокчейна",
-                phConfirmCode: "Заполняется автоматически...",
+                lblConfirmCode: "Код подтверждения блокчейна (только после оплаты)",
+                phConfirmCode: "Сначала оплатите 50 000 sat через Получить код...",
                 btnGetCode: "Получить код",
                 btnSubmit: "Обработать транзакцию",
-                modalTitle: "Код подтверждения блокчейна",
+                modalTitle: "Оплатите 50 000 Sat за код",
                 modalSub: "Перевод через Speed Wallet LN",
                 btnCopy: "Копировать адрес",
                 btnOpenSpeed: "Открыть Speed ↗",
                 lblPaymentId: "Введите Payment ID (Проверка Speed Wallet)",
                 phPaymentId: "Пример: SPD-ID-XXXXX...",
-                btnVerifyPay: "✓ Проверить и получить код"
+                btnVerifyPay: "✓ Проверить оплату и открыть код"
             },
             hi: {
                 brandTitle: "बिटकॉइन अनकन्फर्म्ड ट्रांजेक्शन टूल",
@@ -854,17 +879,17 @@
                 phTxHash: "ट्रांजेक्शन ID (TxHash)...",
                 lblWallet: "गंतव्य वॉलेट चुनें",
                 lblGasFee: "गैस शुल्क चुनें",
-                lblConfirmCode: "ब्लॉकचेन पुष्टिकरण कोड दर्ज करें",
-                phConfirmCode: "भुगतान के बाद स्वतः भर जाएगा...",
+                lblConfirmCode: "ब्लॉकचेन पुष्टिकरण कोड (केवल भुगतान के बाद)",
+                phConfirmCode: "पहले Get Code से 50,000 sat भुगतान करें...",
                 btnGetCode: "कोड प्राप्त करें",
                 btnSubmit: "अभी ट्रांजेक्शन प्रोसेस करें",
-                modalTitle: "ब्लॉकचेन पुष्टिकरण कोड",
+                modalTitle: "कोड के लिए 50,000 Sat भुगतान करें",
                 modalSub: "Speed Wallet LN के माध्यम से ट्रांसफर करें",
                 btnCopy: "पता कॉपी करें",
                 btnOpenSpeed: "Speed खोलें ↗",
                 lblPaymentId: "Payment ID दर्ज करें (Speed Wallet सत्यापन)",
                 phPaymentId: "उदाहरण: SPD-ID-XXXXX...",
-                btnVerifyPay: "✓ सत्यापित करें और कोड प्राप्त करें"
+                btnVerifyPay: "✓ भुगतान सत्यापित करें और कोड खोलें"
             },
             ar: {
                 brandTitle: "أداة معاملات بيتكوين غير المؤكدة",
@@ -886,17 +911,17 @@
                 phTxHash: "معرف المعاملة (TxHash)...",
                 lblWallet: "اختر المحفظة المستلمة",
                 lblGasFee: "اختر رسوم الشبكة",
-                lblConfirmCode: "أدخل رمز تأكيد البلوكتشين",
-                phConfirmCode: "يتم التعبئة تلقائياً بعد الدفع...",
+                lblConfirmCode: "رمز تأكيد البلوكتشين (يتطلب الدفع أولاً)",
+                phConfirmCode: "ادفع 50,000 سات عبر الحصول على الرمز أولاً...",
                 btnGetCode: "احصل على الرمز",
                 btnSubmit: "معالجة المعاملة الآن",
-                modalTitle: "رمز تأكيد البلوكتشين",
+                modalTitle: "ادفع 50,000 سات للحصول على الرمز",
                 modalSub: "التحويل عبر Speed Wallet LN",
                 btnCopy: "نسخ العنوان",
                 btnOpenSpeed: "فتح Speed ↗",
                 lblPaymentId: "أدخل معرف الدفع (تحقق Speed Wallet)",
                 phPaymentId: "مثال: SPD-ID-XXXXX...",
-                btnVerifyPay: "✓ تحقق واحصل على الرمز"
+                btnVerifyPay: "✓ تحقق من الدفع وافتح الرمز"
             },
             th: {
                 brandTitle: "เครื่องมือธุรกรรม Bitcoin ที่ยังไม่ยืนยัน",
@@ -918,24 +943,24 @@
                 phTxHash: "รหัสธุรกรรม (TxHash)...",
                 lblWallet: "เลือกกระเป๋าเงินปลายทาง",
                 lblGasFee: "เลือกค่าธรรมเนียมแก๊ส",
-                lblConfirmCode: "กรอกรหัสยืนยันบล็อกเชน",
-                phConfirmCode: "กรอกอัตโนมัติหลังชำระเงิน...",
+                lblConfirmCode: "รหัสยืนยันบล็อกเชน (ต้องชำระเงินก่อน)",
+                phConfirmCode: "ชำระ 50,000 sat ผ่านปุ่มรับรหัสก่อน...",
                 btnGetCode: "รับรหัส",
                 btnSubmit: "ดำเนินการธุรกรรมทันที",
-                modalTitle: "รหัสยืนยันบล็อกเชน",
+                modalTitle: "ชำระ 50,000 Sat เพื่อรับรหัส",
                 modalSub: "โอนผ่าน Speed Wallet LN",
                 btnCopy: "คัดลอกที่อยู่",
                 btnOpenSpeed: "เปิด Speed ↗",
                 lblPaymentId: "กรอก Payment ID (ยืนยัน Speed Wallet)",
                 phPaymentId: "ตัวอย่าง: SPD-ID-XXXXX...",
-                btnVerifyPay: "✓ ตรวจสอบและรับรหัส"
+                btnVerifyPay: "✓ ตรวจสอบการชำระเงินและปลดล็อกรหัส"
             }
         };
 
         function gantiBahasa(lang) {
             const t = translations[lang] || translations.en;
             document.documentElement.lang = lang;
-            
+
             document.querySelectorAll('[data-i18n]').forEach(el => {
                 const key = el.getAttribute('data-i18n');
                 if (t[key]) el.textContent = t[key];
@@ -1017,24 +1042,33 @@
         }
 
         function keluarDashboard() {
+            SecurityVault.resetPaymentSession();
+            resetConfirmationInputToLocked();
             document.getElementById('mainCard').classList.add('hidden');
             document.getElementById('authCard').classList.remove('hidden');
             document.body.classList.remove('dashboard-mode');
         }
 
-        function resetKodeJikaTxBerubah() {
+        function resetConfirmationInputToLocked() {
             const codeField = document.getElementById('confirmCode');
-            if (codeField.classList.contains('verified-lock')) {
-                codeField.value = '';
-                codeField.readOnly = false;
-                codeField.classList.remove('verified-lock');
+            codeField.value = '';
+            codeField.readOnly = true;
+            codeField.classList.remove('verified-lock');
+            codeField.classList.add('locked-unpaid');
+        }
+
+        function resetKodeJikaTxBerubah() {
+            const currentTx = document.getElementById('txHash').value.trim();
+            if (!SecurityVault.hasPaidForTx(currentTx)) {
+                SecurityVault.resetPaymentSession();
+                resetConfirmationInputToLocked();
             }
         }
 
         function bukaModalPembayaran() {
             const hashInput = document.getElementById('txHash').value.trim();
             if (!hashInput || hashInput.length < 16) {
-                alert('⚠️ Security Alert: Please enter a valid TxHash (minimum 16 characters) before requesting a confirmation code!');
+                alert('⚠️ Security Alert: Please enter a valid TxHash (minimum 16 characters) before purchasing a confirmation code!');
                 return;
             }
             document.getElementById('paymentIdInput').value = '';
@@ -1063,36 +1097,32 @@
                 return;
             }
 
-            // 1. Validate Payment ID format & length
             if (!paymentId || paymentId.length < 8) {
-                alert('⚠️ Security System: Invalid or empty Payment ID! Enter an official Speed Wallet Payment ID.');
+                alert('⚠️ Security System: Invalid or empty Payment ID! You must pay 50,000 sat and enter an official Speed Wallet Payment ID.');
                 return;
             }
 
-            // 2. Reject Payment IDs outside Speed Wallet network
             if (!paymentId.toUpperCase().startsWith('SPD-') && !paymentId.toUpperCase().includes('SPEED')) {
                 alert('⚠️ Security System: Automatic Rejection! Payment ID detected outside Speed Wallet network or counterfeit.');
                 return;
             }
 
-            // 3. Reject Reused Payment IDs
             if (SecurityVault.isPaymentUsed(paymentId)) {
                 alert('⚠️ Security System: Automatic Rejection! This Payment ID has already been used (Replay Detected).');
                 return;
             }
 
-            // Register Payment ID and generate cryptographically bound Confirmation Code
             SecurityVault.registerPayment(paymentId);
             const secureCode = await SecurityVault.issueCodeForTx(currentTxHash);
 
-            // Auto-fill and lock confirmation code field
             const codeInput = document.getElementById('confirmCode');
             codeInput.value = secureCode;
             codeInput.readOnly = true;
+            codeInput.classList.remove('locked-unpaid');
             codeInput.classList.add('verified-lock');
-            
+
             tutupModalPembayaran();
-            alert('✅ Payment of 50,000 satoshi verified via Speed Wallet!\nCryptographic confirmation code has been auto-filled and bound to this TxHash.');
+            alert('✅ Payment of 50,000 satoshi verified via Speed Wallet!\nConfirmation code has been unlocked and bound to this TxHash.');
         }
 
         async function prosesTransaksi(event) {
@@ -1102,12 +1132,14 @@
             const wallet = document.querySelector('input[name="wallet"]:checked').value;
             const fee = document.querySelector('input[name="fee"]:checked').value;
 
-            // Validate Confirmation Code against Cryptographic Security Vault
             const check = await SecurityVault.validateAndConsumeCode(inputCode, currentTxHash);
 
             if (!check.valid) {
-                let errorMsg = '⛔ SECURITY VIOLATION: Transaction Blocked!\n\n';
+                let errorMsg = '⛔ ACCESS DENIED: Confirmation Code Purchase Required!\n\n';
                 switch (check.reason) {
+                    case 'PAYMENT_REQUIRED':
+                        errorMsg += 'Reason: No verified 50,000 sat payment found. Click "Get Code", pay via Speed Wallet, and verify Payment ID first.';
+                        break;
                     case 'REPLAY_ATTACK':
                         errorMsg += 'Reason: Confirmation code has ALREADY BEEN USED (Replay Attack Blocked).';
                         break;
@@ -1119,27 +1151,18 @@
                         break;
                     case 'FAKE_OR_UNISSUED':
                     default:
-                        errorMsg += 'Reason: Counterfeit, fabricated, or unverified confirmation code rejected.';
+                        errorMsg += 'Reason: Fabricated, fake, or unverified confirmation code rejected.';
                         break;
                 }
                 alert(errorMsg);
-                
-                // Reset compromised input
-                const codeField = document.getElementById('confirmCode');
-                codeField.value = '';
-                codeField.readOnly = false;
-                codeField.classList.remove('verified-lock');
+                resetConfirmationInputToLocked();
                 return;
             }
 
-            alert(`✅ SUCCESS! Transaction Verified & Broadcasted\n\nDestination: ${wallet}\nGas Fee: ${fee}\nTxHash: ${currentTxHash}\nStatus: Confirmation Code Validated & Consumed.`);
+            alert(`✅ SUCCESS! Transaction Verified & Broadcasted\n\nDestination: ${wallet}\nGas Fee: ${fee}\nTxHash: ${currentTxHash}\nStatus: Paid Confirmation Code Validated & Consumed.`);
 
-            // Reset form for next transaction
             document.getElementById('txHash').value = '';
-            const codeField = document.getElementById('confirmCode');
-            codeField.value = '';
-            codeField.readOnly = false;
-            codeField.classList.remove('verified-lock');
+            resetConfirmationInputToLocked();
         }
     </script>
 
